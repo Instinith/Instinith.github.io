@@ -291,7 +291,14 @@ img { max-width: 100%; height: auto; }
 .feed-title .sep { color: var(--muted); font-weight: 500; margin: 0 .3em; }
 .feed-count { color: var(--muted); font-size: .85rem; margin: 0; white-space: nowrap; }
 
-.card { border-bottom: 1px solid var(--border); }
+[hidden] { display: none !important; }
+
+.card {
+  border-bottom: 1px solid var(--border);
+  /* 화면 밖 카드는 스크롤해서 가까워질 때까지 그리지 않음 (글이 많아도 가벼움) */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 190px;
+}
 
 .card-link {
   display: grid;

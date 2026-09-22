@@ -1,5 +1,10 @@
 /* ==========================================================================
    index.html — 폴더 트리 + 검색 + 최신순 피드 + 최근 글/통계
+
+   로딩 순서
+   1) localStorage 에 저장된 목록이 있으면 네트워크를 기다리지 않고 바로 그림
+   2) 마지막 확인이 5분 이내면 끝 (API 호출 0회). 단, 새로고침(F5)은 항상 다시 확인
+   3) 트리 API 1회 호출 → sha 가 달라진 글만 raw.githubusercontent.com 에서 다시 받음
    ========================================================================== */
 (function () {
   'use strict';
@@ -15,62 +20,79 @@
     search: document.getElementById('search-input'),
     recent: document.getElementById('recent'),
     stats: document.getElementById('stats'),
+    empty: null,
   };
 
   const state = {
     posts: [],
+    cards: [],         // posts 와 같은 순서의 카드 요소
+    signature: null,   // 현재 그려진 목록의 식별값 (바뀐 게 없으면 다시 그리지 않음)
     root: null,        // 폴더 트리 (로드 완료 전엔 null)
     folder: '',        // 현재 선택된 폴더 경로 ('' = 전체)
     query: '',
     collapsed: new Set(),
   };
 
-  // 트리 API 결과를 탭 세션 동안 잠깐 저장해 새로고침 시 API 호출을 아끼기
-  const CACHE_KEY = 'tree:' + C.owner + '/' + C.repo + '@' + C.branch + ':' + S.postsPrefix;
-  const CACHE_TTL = 5 * 60 * 1000;
-
   S.initThemeToggle(document.getElementById('theme-toggle'));
   readHash();
 
+  let searchTimer;
   els.search.addEventListener('input', () => {
-    state.query = els.search.value.trim();
-    renderFeed();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.query = els.search.value.trim().toLowerCase();
+      renderFeed();
+    }, 120);
   });
   els.tree.addEventListener('click', onTreeClick);
   document.addEventListener('click', (e) => {
-    if (e.target.closest('[data-action="retry"]')) { clearCache(); load(); }
+    if (e.target.closest('[data-action="retry"]')) load();
     if (e.target.closest('[data-action="show-all"]')) { e.preventDefault(); selectFolder(''); }
   });
   window.addEventListener('popstate', () => {
     readHash();
-    renderTree();
+    updateTreeActive();
     renderFeed();
   });
-
-  load();
 
   /* ---------- 데이터 로드 ---------- */
 
   async function load() {
-    state.root = null;
-    els.feed.innerHTML = '<div class="loading" role="status">글 목록을 불러오는 중…</div>';
-    els.tree.innerHTML = '<p class="side-placeholder">불러오는 중…</p>';
-    els.feedHead.innerHTML = '';
+    const cache = S.readCache();
+    const cacheComplete = !!cache && cache.files.every((f) => cache.posts[f.path]);
+    let shown = false;
 
-    let paths;
+    if (cacheComplete) {
+      setPosts(cache.files, cache.files.map((f) => cache.posts[f.path]));
+      shown = true;
+    } else {
+      showLoading();
+    }
+
+    if (shown && Date.now() - (cache.checkedAt || 0) < RECHECK_MS && !isReload()) return;
+
+    let tree;
     try {
-      paths = await fetchPostPaths();
+      tree = await fetchTree();
     } catch (err) {
+      if (shown) {
+        console.warn('[feed] 최신 목록을 확인하지 못해 저장된 목록을 보여줍니다:', err);
+        return;
+      }
       console.error('[feed] 글 목록을 불러오지 못했습니다:', err);
       renderError(err);
       return;
     }
 
-    state.posts = (await Promise.all(paths.map(loadPost))).sort(byDateDesc);
-    state.root = buildTree(state.posts);
-    renderTree();
-    renderFeed();
-    renderSidebar();
+    const files = tree.files;
+    const old = (cache && cache.posts) || {};
+    const entries = await Promise.all(files.map((f) => loadEntry(f, old[f.path])));
+
+    const next = { checkedAt: Date.now(), files, posts: {} };
+    entries.forEach((e, i) => { if (e.verified) next.posts[files[i].path] = e.data; });
+    S.writeCache(next);
+
+    setPosts(files, entries.map((e) => e.data));
   }
 
   class LoadError extends Error {
@@ -81,11 +103,16 @@
     }
   }
 
-  // GitHub API 호출은 이 함수의 딱 1번뿐. tree_sha 자리에 브랜치 이름을 그대로 사용.
-  async function fetchPostPaths() {
-    const cached = readCache();
-    if (cached) return cached;
+  // 이 시간 안에 다시 들어오면(글 보고 목록으로 돌아오기 등) API 를 호출하지 않음
+  const RECHECK_MS = 5 * 60 * 1000;
 
+  function isReload() {
+    const nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+    return !!nav && nav.type === 'reload';
+  }
+
+  // GitHub API 호출은 이 함수의 딱 1번뿐. tree_sha 자리에 브랜치 이름을 그대로 사용.
+  async function fetchTree() {
     const url = 'https://api.github.com/repos/' +
       encodeURIComponent(C.owner) + '/' + encodeURIComponent(C.repo) +
       '/git/trees/' + C.branch.split('/').map(encodeURIComponent).join('/') + '?recursive=1';
@@ -103,39 +130,52 @@
         throw new LoadError('ratelimit', 'rate limit exceeded', reset || null);
       }
       if (res.status === 404) throw new LoadError('notfound', 'HTTP 404');
-      if (res.status === 409) return []; // 커밋이 하나도 없는 빈 저장소
+      if (res.status === 409) return { files: [] }; // 커밋이 하나도 없는 빈 저장소
       throw new LoadError('http', 'HTTP ' + res.status);
     }
 
     const data = await res.json();
     const prefix = S.postsPrefix + '/';
-    const paths = (data.tree || [])
+    const files = (data.tree || [])
       .filter((item) => item.type === 'blob' && item.path.startsWith(prefix) && /\.md$/i.test(item.path))
-      .map((item) => item.path);
-
-    writeCache(paths);
-    return paths;
+      .map((item) => ({ path: item.path, sha: item.sha }));
+    return { files };
   }
 
-  // 본문은 raw.githubusercontent.com 에서 (API 한도와 무관)
-  async function loadPost(path) {
+  // 본문은 raw.githubusercontent.com 에서 (API 한도와 무관). sha 가 같으면 저장본 재사용.
+  async function loadEntry(file, cached) {
+    if (cached && cached.sha === file.sha) return { data: cached, verified: true };
+    try {
+      const res = await fetch(S.rawUrl(file.path));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const buf = await res.arrayBuffer();
+      const { data, body } = S.parseFrontMatter(new TextDecoder().decode(buf));
+      const entry = { sha: file.sha, title: data.title || '', date: data.date || '', excerpt: data.excerpt || '', body };
+      // 푸시 직후엔 raw CDN 이 이전 버전을 줄 수 있음 → sha 가 맞을 때만 저장
+      const sha = await S.gitBlobSha(buf).catch(() => null);
+      return { data: entry, verified: sha === file.sha };
+    } catch (e) {
+      console.warn('[feed] 글을 읽지 못했습니다:', file.path, e);
+      return { data: null, verified: false };
+    }
+  }
+
+  function toPost(path, entry) {
     const slug = S.pathToSlug(path);
     const segments = slug.split('/');
     const fileName = segments[segments.length - 1];
-    const post = { slug, path, folder: segments.slice(0, -1), title: fileName, date: '', excerpt: '', body: '', failed: false };
-    try {
-      const res = await fetch(S.rawUrl(path));
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const { data, body } = S.parseFrontMatter(await res.text());
-      post.title = data.title || fileName;
-      post.date = data.date || '';
-      post.excerpt = data.excerpt || '';
-      post.body = body; // 검색용 (화면에는 표시하지 않음)
-    } catch (e) {
-      console.warn('[feed] 글을 읽지 못했습니다:', path, e);
-      post.failed = true;
-      post.excerpt = '이 글의 내용을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.';
-    }
+    const e = entry || {};
+    const post = {
+      slug,
+      folder: segments.slice(0, -1),
+      title: e.title || fileName,
+      date: e.date || '',
+      excerpt: entry ? e.excerpt : '이 글의 내용을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.',
+      body: e.body || '',
+    };
+    post.folderPath = post.folder.join('/');
+    post.titleLower = post.title.toLowerCase();
+    post.bodyLower = post.body.toLowerCase();
     return post;
   }
 
@@ -143,20 +183,24 @@
     return (b.date || '').localeCompare(a.date || '') || a.title.localeCompare(b.title, 'ko');
   }
 
-  function readCache() {
-    try {
-      const raw = sessionStorage.getItem(CACHE_KEY);
-      if (!raw) return null;
-      const { t, paths } = JSON.parse(raw);
-      if (Date.now() - t > CACHE_TTL || !Array.isArray(paths)) return null;
-      return paths;
-    } catch (e) { return null; }
+  function setPosts(files, entries) {
+    const signature = files.map((f, i) => f.path + ':' + f.sha + ':' + (entries[i] ? 1 : 0)).join('|');
+    if (signature === state.signature) return;
+    state.signature = signature;
+    state.posts = files.map((f, i) => toPost(f.path, entries[i])).sort(byDateDesc);
+    state.root = buildTree(state.posts);
+    renderTree();
+    buildCards();
+    renderFeed();
+    renderSidebar();
   }
-  function writeCache(paths) {
-    try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), paths })); } catch (e) { /* 무시 */ }
-  }
-  function clearCache() {
-    try { sessionStorage.removeItem(CACHE_KEY); } catch (e) { /* 무시 */ }
+
+  function showLoading() {
+    state.root = null;
+    state.signature = null;
+    els.feed.innerHTML = '<div class="loading" role="status">글 목록을 불러오는 중…</div>';
+    els.tree.innerHTML = '<p class="side-placeholder">불러오는 중…</p>';
+    els.feedHead.innerHTML = '';
   }
 
   /* ---------- 폴더 트리 ---------- */
@@ -219,13 +263,23 @@
       '</li>';
   }
 
+  // 트리를 다시 그리지 않고 선택 표시만 갱신
+  function updateTreeActive() {
+    els.tree.querySelectorAll('.tree-item').forEach((btn) => {
+      btn.setAttribute('aria-current', String(btn.getAttribute('data-folder') === state.folder));
+    });
+  }
+
   function onTreeClick(e) {
     const toggle = e.target.closest('[data-toggle]');
     if (toggle) {
       const path = toggle.getAttribute('data-toggle');
-      if (state.collapsed.has(path)) state.collapsed.delete(path);
-      else state.collapsed.add(path);
-      renderTree();
+      const li = toggle.closest('.tree-node');
+      const collapsed = li.classList.toggle('is-collapsed');
+      if (collapsed) state.collapsed.add(path); else state.collapsed.delete(path);
+      const name = li.querySelector('.name').textContent;
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      toggle.setAttribute('aria-label', name + ' 하위 폴더 ' + (collapsed ? '펼치기' : '접기'));
       return;
     }
     const item = e.target.closest('[data-folder]');
@@ -242,7 +296,7 @@
     state.folder = folder;
     const url = folder ? '#folder=' + encodeURIComponent(folder) : location.pathname + location.search;
     history.pushState(null, '', url);
-    renderTree();
+    updateTreeActive();
     renderFeed();
   }
 
@@ -259,52 +313,59 @@
 
   function inFolder(post) {
     if (!state.folder) return true;
-    const fp = post.folder.join('/');
-    return fp === state.folder || fp.startsWith(state.folder + '/');
+    return post.folderPath === state.folder || post.folderPath.startsWith(state.folder + '/');
   }
 
-  // 검색 대상: 제목 + 본문
-  function matchesQuery(post, q) {
-    if (!q) return true;
-    return post.title.toLowerCase().includes(q) || post.body.toLowerCase().includes(q);
+  // 검색 대상: 제목 + 본문 (state.query 는 이미 소문자)
+  function matchesQuery(post) {
+    const q = state.query;
+    return !q || post.titleLower.includes(q) || post.bodyLower.includes(q);
+  }
+
+  // 카드는 목록이 바뀔 때만 한 번 만들고, 폴더/검색 변경 시엔 보이기/숨기기만
+  function buildCards() {
+    els.feed.innerHTML = state.posts.map(cardHtml).join('') + '<div id="feed-empty"></div>';
+    state.cards = Array.from(els.feed.querySelectorAll('.card'));
+    els.empty = document.getElementById('feed-empty');
   }
 
   function renderFeed() {
     if (!state.root) return;
-    const q = state.query.toLowerCase();
-    const list = state.posts.filter(inFolder).filter((p) => matchesQuery(p, q));
+
+    let count = 0;
+    state.posts.forEach((p, i) => {
+      const show = inFolder(p) && matchesQuery(p);
+      state.cards[i].hidden = !show;
+      if (show) count++;
+    });
 
     const titleHtml = state.folder
       ? '<span class="crumb">' + S.crumbHtml(state.folder.split('/'), false) + '</span>'
       : '전체 글';
     els.feedHead.innerHTML =
       '<h1 class="feed-title">' + titleHtml + '</h1>' +
-      '<p class="feed-count">' + list.length + '개의 글</p>';
+      '<p class="feed-count">' + count + '개의 글</p>';
 
     if (state.posts.length === 0) {
-      els.feed.innerHTML =
+      els.empty.innerHTML =
         '<div class="notice">' +
         '<p class="notice-title">아직 작성된 글이 없어요</p>' +
         '<p>저장소의 <code>' + esc(S.postsPrefix) + '/</code> 폴더 안에 마크다운(<code>.md</code>) 파일을 추가하면 여기에 최신순으로 나타납니다. ' +
         '폴더를 만들어 넣으면 왼쪽 폴더 목록에도 자동으로 생겨요.</p>' +
         '<pre>' + esc(S.postsPrefix) + '/공부/리액트/첫-글.md\n\n---\ntitle: 글 제목\ndate: 2026-01-01\nexcerpt: 목록에 보일 한두 문장 요약\n---\n\n본문을 마크다운으로 씁니다.</pre>' +
         '</div>';
-      return;
-    }
-
-    if (list.length === 0) {
-      els.feed.innerHTML = q
+    } else if (count === 0) {
+      els.empty.innerHTML = state.query
         ? '<div class="notice"><p class="notice-title">검색 결과가 없어요</p>' +
-          '<p>“' + esc(state.query) + '”에 맞는 글을 ' + (state.folder ? '이 폴더에서 ' : '') +
+          '<p>“' + esc(els.search.value.trim()) + '”에 맞는 글을 ' + (state.folder ? '이 폴더에서 ' : '') +
           '찾지 못했어요. 다른 단어로 검색해 보거나 ' +
           (state.folder ? '<a href="index.html" data-action="show-all">전체 글</a>에서 찾아보세요.' : '철자를 확인해 보세요.') + '</p></div>'
         : '<div class="notice"><p class="notice-title">이 폴더에는 글이 없어요</p>' +
           '<p>“' + esc(state.folder) + '” 폴더를 찾을 수 없거나 아직 글이 없습니다. ' +
           '<a href="index.html" data-action="show-all">전체 글 보기</a></p></div>';
-      return;
+    } else {
+      els.empty.innerHTML = '';
     }
-
-    els.feed.innerHTML = list.map(cardHtml).join('');
   }
 
   function cardHtml(p) {
@@ -339,6 +400,8 @@
     } else if (err.message) {
       body = 'GitHub 응답에 문제가 있었어요 (' + esc(err.message) + '). 잠시 후 다시 시도해 주세요.';
     }
+    state.root = null;
+    state.signature = null;
     els.feedHead.innerHTML = '';
     els.feed.innerHTML =
       '<div class="notice" role="alert">' +
@@ -371,4 +434,7 @@
       '<div><dt>전체 글</dt><dd>' + posts + '개</dd></div>' +
       '<div><dt>마지막 업데이트</dt><dd>' + esc(updated) + '</dd></div>';
   }
+
+  // 모든 상수/함수가 정의된 뒤에 시작 (저장된 목록은 첫 await 전에 동기적으로 그려지기 때문)
+  load();
 })();

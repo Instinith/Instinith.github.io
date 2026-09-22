@@ -22,8 +22,16 @@
 
   const path = S.slugToPath(slug);
   const fileUrl = S.rawUrl(path);
-  let text;
+  const segments = slug.split('/');
+  const folder = segments.slice(0, -1);
 
+  // 목록 페이지에서 저장해 둔 글이 있으면 네트워크를 기다리지 않고 먼저 표시
+  const cache = S.readCache();
+  const cached = cache && cache.posts[path];
+  let shownKey = null;
+  if (cached) render(cached, cached.body);
+
+  let text;
   try {
     const res = await fetch(fileUrl);
     if (res.status === 404) {
@@ -36,33 +44,42 @@
     if (!res.ok) throw new Error('HTTP ' + res.status);
     text = await res.text();
   } catch (e) {
+    if (shownKey) {
+      console.warn('[post] 최신 버전을 확인하지 못해 저장된 글을 보여줍니다:', e);
+      return;
+    }
     console.error('[post] 글을 불러오지 못했습니다:', e);
     showNotice('글을 불러오지 못했어요', '인터넷 연결을 확인하고 잠시 후 다시 시도해 주세요.', true);
     return;
   }
 
   const { data, body } = S.parseFrontMatter(text);
-  const segments = slug.split('/');
-  const folder = segments.slice(0, -1);
-  const title = data.title || segments[segments.length - 1];
-
-  if (data.excerpt) {
-    const meta = document.querySelector('meta[name="description"]');
-    if (meta) meta.setAttribute('content', data.excerpt);
-  }
-
-  $article.innerHTML =
-    '<header class="post-header">' +
-    (folder.length ? '<nav class="crumb" aria-label="폴더 경로">' + S.crumbHtml(folder, true) + '</nav>' : '') +
-    '<h1 class="post-title">' + esc(title) + '</h1>' +
-    (data.date ? '<p class="post-meta"><time datetime="' + esc(data.date) + '">' + esc(S.formatDate(data.date)) + '</time></p>' : '') +
-    '</header>' +
-    '<div class="prose">' + renderMarkdown(body) + '</div>' +
-    '<footer class="post-footer"><a class="back-link" href="index.html">← 목록으로 돌아가기</a></footer>';
-
-  fixRelativeUrls($article.querySelector('.prose'));
+  render(data, body); // 저장본과 내용이 같으면 다시 그리지 않음
 
   /* ---------- helpers ---------- */
+
+  function render(data, body) {
+    const key = JSON.stringify([data.title || '', data.date || '', body]);
+    if (key === shownKey) return;
+    shownKey = key;
+
+    const title = data.title || segments[segments.length - 1];
+    if (data.excerpt) {
+      const meta = document.querySelector('meta[name="description"]');
+      if (meta) meta.setAttribute('content', data.excerpt);
+    }
+
+    $article.innerHTML =
+      '<header class="post-header">' +
+      (folder.length ? '<nav class="crumb" aria-label="폴더 경로">' + S.crumbHtml(folder, true) + '</nav>' : '') +
+      '<h1 class="post-title">' + esc(title) + '</h1>' +
+      (data.date ? '<p class="post-meta"><time datetime="' + esc(data.date) + '">' + esc(S.formatDate(data.date)) + '</time></p>' : '') +
+      '</header>' +
+      '<div class="prose">' + renderMarkdown(body) + '</div>' +
+      '<footer class="post-footer"><a class="back-link" href="index.html">← 목록으로 돌아가기</a></footer>';
+
+    fixRelativeUrls($article.querySelector('.prose'));
+  }
 
   function renderMarkdown(md) {
     if (window.marked && typeof window.marked.parse === 'function') {

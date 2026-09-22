@@ -30,9 +30,17 @@
     })();
   </script>
 
+  <link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
   <link rel="stylesheet" href="assets/style.css">
+
+  <!-- 마크다운 → HTML 변환(marked), 결과 정리(DOMPurify). 빌드 없이 CDN에서 바로 로드.
+       defer: HTML 해석을 막지 않고 병렬로 받은 뒤 순서대로 실행 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" defer></script>
+  <script src="assets/common.js" defer></script>
+  <script src="assets/post.js" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -47,11 +55,5 @@
       <div class="loading" role="status">글을 불러오는 중…</div>
     </article>
   </main>
-
-  <!-- 마크다운 → HTML 변환(marked), 결과 정리(DOMPurify). 빌드 없이 CDN에서 바로 로드 -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
-  <script src="assets/common.js"></script>
-  <script src="assets/post.js"></script>
 </body>
 </html>
