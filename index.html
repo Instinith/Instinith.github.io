@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Instinith</title>
+  <meta name="description" content="공부 일지, 프로젝트 소개, 포트폴리오를 한 곳에 모아두는 개인 사이트">
+
+  <!-- ===== CONFIG: 글을 읽어올 저장소 정보 ===== -->
+  <script>
+    window.CONFIG = {
+      owner: "Instinith",
+      repo: "Instinith.github.io",
+      branch: "main",
+      postsPath: "posts"
+    };
+  </script>
+
+  <!-- 화면이 그려지기 전에 테마를 적용해 깜빡임 방지 -->
+  <script>
+    (function () {
+      var t = 'light';
+      try {
+        t = localStorage.getItem('site-theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+      } catch (e) { t = 'light'; }
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="index.html">
+        <span class="brand-name">Instinith</span>
+      </a>
+      <button type="button" class="theme-toggle" id="theme-toggle">테마 전환</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- 왼쪽: 폴더 탐색 -->
+    <nav class="side side-left" aria-label="폴더">
+      <section class="side-section">
+        <div id="tree"><p class="side-placeholder">불러오는 중…</p></div>
+      </section>
+    </nav>
+
+    <!-- 가운데: 검색 + 피드 -->
+    <main class="main" id="main">
+      <div class="search" role="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <label class="sr-only" for="search-input">글 검색</label>
+        <input type="search" id="search-input" placeholder="제목, 내용으로 검색" autocomplete="off">
+      </div>
+      <div class="feed-head" id="feed-head"></div>
+      <div id="feed" aria-live="polite">
+        <div class="loading" role="status">글 목록을 불러오는 중…</div>
+      </div>
+    </main>
+
+    <!-- 오른쪽: 최근 글 + 통계 -->
+    <aside class="side side-right" aria-label="최근 글과 통계">
+      <section class="side-section">
+        <h2 class="side-title">최근 글</h2>
+        <ul class="recent" id="recent"><li class="side-placeholder">불러오는 중…</li></ul>
+      </section>
+      <section class="side-section">
+        <dl class="stats" id="stats" aria-label="통계">
+          <div><dt>전체 글</dt><dd>—</dd></div>
+          <div><dt>마지막 업데이트</dt><dd>—</dd></div>
+        </dl>
+      </section>
+    </aside>
+  </div>
+
+  <script src="assets/common.js"></script>
+  <script src="assets/feed.js"></script>
+</body>
+</html>

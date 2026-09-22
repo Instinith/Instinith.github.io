@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Instinith</title>
+  <meta name="description" content="Instinith 개인 사이트의 글">
+
+  <!-- ===== CONFIG: 글을 읽어올 저장소 정보 (index.html 과 동일하게 유지) ===== -->
+  <script>
+    window.CONFIG = {
+      owner: "Instinith",
+      repo: "Instinith.github.io",
+      branch: "main",
+      postsPath: "posts"
+    };
+  </script>
+
+  <!-- 화면이 그려지기 전에 테마를 적용해 깜빡임 방지 -->
+  <script>
+    (function () {
+      var t = 'light';
+      try {
+        t = localStorage.getItem('site-theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+      } catch (e) { t = 'light'; }
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="back-link" href="index.html">← 목록으로</a>
+      <button type="button" class="theme-toggle" id="theme-toggle">테마 전환</button>
+    </div>
+  </header>
+
+  <main class="post-wrap">
+    <article id="article" aria-live="polite">
+      <div class="loading" role="status">글을 불러오는 중…</div>
+    </article>
+  </main>
+
+  <!-- 마크다운 → HTML 변환(marked), 결과 정리(DOMPurify). 빌드 없이 CDN에서 바로 로드 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <script src="assets/common.js"></script>
+  <script src="assets/post.js"></script>
+</body>
+</html>

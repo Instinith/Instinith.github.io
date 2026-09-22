@@ -1,0 +1,10 @@
+# 사이트 동작에 필요 없는 문서
+SETUP.md
+
+# OS / 에디터 부산물
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+.claude/
